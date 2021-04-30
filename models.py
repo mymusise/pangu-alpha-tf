@@ -6,6 +6,7 @@ from transformers.models.gpt2.modeling_tf_gpt2 import (
     TFBaseModelOutputWithPast,
     TFAttention,
     TFBlock,
+    TFConv1D,
     TFMLP,
     input_processing,
     shape_list,
@@ -14,6 +15,12 @@ import tensorflow as tf
 
 
 class TFQueryLayerAttention(TFAttention):
+    def __init__(self, nx, n_ctx, config, scale=False, **kwargs):
+        n_state = nx
+        super().__init__(nx, n_ctx, config, scale=scale, **kwargs)
+        self.c_attn = TFConv1D(n_state * 2, nx, initializer_range=config.initializer_range, name="c_attn")
+        self.c_attn_query = TFConv1D(n_state, nx, initializer_range=config.initializer_range, name="c_attn_query")
+
     def call(
         self,
         x,
@@ -26,7 +33,7 @@ class TFQueryLayerAttention(TFAttention):
         query_hidden_state=None,
     ):
         x = self.c_attn(x)
-        query = self.c_attn(query_hidden_state)
+        query = self.c_attn_query(query_hidden_state)
         key, value = tf.split(x, 2, axis=2)
         query = self.split_heads(query)
         key = self.split_heads(key)
@@ -63,7 +70,7 @@ class TFQueryLayerAttention(TFAttention):
 
 class TFQueryLayer(TFBlock):
     def __init__(self, n_ctx, config, scale=False, **kwargs):
-        super().__init__(**kwargs)
+        super().__init__(n_ctx, config, scale=scale, **kwargs)
         nx = config.n_embd
         inner_dim = config.n_inner if config.n_inner is not None else 4 * nx
         self.ln_1 = tf.keras.layers.LayerNormalization(
@@ -110,9 +117,9 @@ class TFQueryLayer(TFBlock):
 
 class PanguMainLayer(TFGPT2MainLayer):
     def __init__(self, config, *inputs, **kwargs):
-        super().__init__(*inputs, **kwargs)
+        super().__init__(config, *inputs, **kwargs)
         self.tqe = TFSharedEmbeddings(
-            config.vocab_size,
+            config.n_ctx,
             config.hidden_size,
             initializer_range=config.initializer_range,
             name="top_query_embedding",
